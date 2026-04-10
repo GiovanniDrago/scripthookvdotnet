@@ -19,7 +19,7 @@ namespace WinForms = System::Windows::Forms;
 [assembly:AssemblyDescription("An ASI plugin for Grand Theft Auto V, which allows running scripts written in any .NET language in-game.")];
 [assembly:AssemblyCompany("crosire & contributors")];
 [assembly:AssemblyProduct("ScriptHookVDotNet")];
-[assembly:AssemblyCopyright("Copyright © 2015 crosire")];
+[assembly:AssemblyCopyright("Copyright ï¿½ 2015 crosire")];
 [assembly:AssemblyVersion(SHVDN_VERSION)];
 [assembly:AssemblyFileVersion(SHVDN_VERSION)];
 // Sign with a strong name to distinguish from older versions and cause .NET framework runtime to bind the correct assemblies
@@ -54,7 +54,8 @@ public:
 	[SHVDN::ConsoleCommand("Reload all scripts from the scripts directory")]
 	static void Reload()
 	{
-		console->PrintInfo("~y~Reloading ...");
+		if (console != nullptr)
+			console->PrintInfo("~y~Reloading ...");
 
 		// Force a reload on next tick
 		sGameReloaded = true;
@@ -113,6 +114,8 @@ internal:
 	static SHVDN::ScriptDomain ^domain = SHVDN::ScriptDomain::CurrentDomain;
 	static WinForms::Keys reloadKey = WinForms::Keys::None;
 	static WinForms::Keys consoleKey = WinForms::Keys::F4;
+	static bool disableConsole = false;
+	static bool autoLoadScripts = true;
 
 
 	static void SetConsole()
@@ -160,12 +163,16 @@ static void ScriptHookVDotnet_ManagedInit()
 			if (data->Length != 2)
 				continue;
 
-			     if (data[0] == "ReloadKey")
+			     if (data[0] == "ReloadKey" || data[0] == "ReloadKeyBinding")
 				Enum::TryParse(data[1], true, ScriptHookVDotNet::reloadKey);
-			else if (data[0] == "ConsoleKey")
+			else if (data[0] == "ConsoleKey" || data[0] == "ConsoleKeyBinding")
 				Enum::TryParse(data[1], true, ScriptHookVDotNet::consoleKey);
 			else if (data[0] == "ScriptsLocation")
 				scriptPath = data[1];
+			else if (data[0] == "DisableConsole")
+				Boolean::TryParse(data[1], ScriptHookVDotNet::disableConsole);
+			else if (data[0] == "AutoLoadScripts")
+				Boolean::TryParse(data[1], ScriptHookVDotNet::autoLoadScripts);
 		}
 	}
 	catch (Exception ^ex)
@@ -178,33 +185,47 @@ static void ScriptHookVDotnet_ManagedInit()
 	if (domain == nullptr)
 		return;
 
-	try
+	if (ScriptHookVDotNet::disableConsole)
 	{
-		// Instantiate console inside script domain, so that it can access the scripting API
-		console = (SHVDN::Console ^)domain->AppDomain->CreateInstanceFromAndUnwrap(
-			SHVDN::Console::typeid->Assembly->Location, SHVDN::Console::typeid->FullName);
-
-		// Restore the console command history (set a empty history for the first time)
-		console->CommandHistory = stashedConsoleCommandHistory;
-
-		// Print welcome message
-		console->PrintInfo("~c~--- Community Script Hook V .NET " SHVDN_VERSION " ---");
-		console->PrintInfo("~c~--- Type \"Help()\" to print an overview of available commands ---");
-
-		// Update console pointer in script domain
-		domain->AppDomain->SetData("Console", console);
-		domain->AppDomain->DoCallBack(gcnew CrossAppDomainDelegate(&ScriptHookVDotNet::SetConsole));
-
-		// Add default console commands
-		console->RegisterCommands(ScriptHookVDotNet::typeid);
+		SHVDN::Log::Message(SHVDN::Log::Level::Info, "DisableConsole is set to true, skipping console creation.");
 	}
-	catch (Exception ^ex)
+	else
 	{
-		SHVDN::Log::Message(SHVDN::Log::Level::Error, "Failed to create console: ", ex->ToString());
+		try
+		{
+			// Instantiate console inside script domain, so that it can access the scripting API
+			console = (SHVDN::Console ^)domain->AppDomain->CreateInstanceFromAndUnwrap(
+				SHVDN::Console::typeid->Assembly->Location, SHVDN::Console::typeid->FullName);
+
+			// Restore the console command history (set a empty history for the first time)
+			console->CommandHistory = stashedConsoleCommandHistory;
+
+			// Print welcome message
+			console->PrintInfo("~c~--- Community Script Hook V .NET " SHVDN_VERSION " ---");
+			console->PrintInfo("~c~--- Type \"Help()\" to print an overview of available commands ---");
+
+			// Update console pointer in script domain
+			domain->AppDomain->SetData("Console", console);
+			domain->AppDomain->DoCallBack(gcnew CrossAppDomainDelegate(&ScriptHookVDotNet::SetConsole));
+
+			// Add default console commands
+			console->RegisterCommands(ScriptHookVDotNet::typeid);
+		}
+		catch (Exception ^ex)
+		{
+			SHVDN::Log::Message(SHVDN::Log::Level::Error, "Failed to create console: ", ex->ToString());
+		}
 	}
 
 	// Start scripts in the newly created domain
-	domain->Start();
+	if (ScriptHookVDotNet::autoLoadScripts)
+	{
+		domain->Start();
+	}
+	else
+	{
+		SHVDN::Log::Message(SHVDN::Log::Level::Info, "AutoLoadScripts is set to false, skipping auto loading scripts.");
+	}
 }
 
 static void ScriptHookVDotnet_ManagedTick()
@@ -230,15 +251,16 @@ static void ScriptHookVDotnet_ManagedKeyboardMessage(unsigned long keycode, bool
 	if (shift) keys = keys | WinForms::Keys::Shift;
 	if (alt)   keys = keys | WinForms::Keys::Alt;
 
-	SHVDN::Console ^console = ScriptHookVDotNet::console;
-	if (console != nullptr)
+	if (keydown && keys == ScriptHookVDotNet::reloadKey)
 	{
-		if (keydown && keys == ScriptHookVDotNet::reloadKey)
-		{
-			// Force a reload
-			ScriptHookVDotNet::Reload();
-			return;
-		}
+		// Force a reload regardless of console availability
+		ScriptHookVDotNet::Reload();
+		return;
+	}
+
+	SHVDN::Console ^console = ScriptHookVDotNet::console;
+	if (!ScriptHookVDotNet::disableConsole && console != nullptr)
+	{
 		if (keydown && keys == ScriptHookVDotNet::consoleKey)
 		{
 			// Toggle open state
