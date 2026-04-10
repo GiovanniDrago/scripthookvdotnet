@@ -119,13 +119,8 @@ public:
     static void Reload()
     {
         SHVDN::Console^ console = GetConsole();
-        if (console == nullptr)
-        {
-            WriteErrorMessageForConsoleNotLoadedWhenExecutingCommand("Reload");
-            return;
-        }
-
-        console->PrintInfo("~y~Reloading ...");
+        if (console != nullptr)
+            console->PrintInfo("~y~Reloading ...");
 
         // Force a reload on next tick
         RequestScriptDomainToReload();
@@ -227,6 +222,7 @@ internal:
     static array<WinForms::Keys>^ consoleKeyBinding = { WinForms::Keys::F4 };
     static unsigned int scriptTimeoutThreshold = 5000;
     static bool shouldWarnOfScriptsBuiltAgainstDeprecatedApiWithTicker = true;
+    static bool DisableConsole = false;
     static bool AutoLoadScripts = true;
 
     // We use this domain to prevent from the keyboard thread reading stale values, and to protect against race
@@ -593,6 +589,14 @@ static void ScriptHookVDotNet_ManagedInit()
                     ScriptHookVDotNet::shouldWarnOfScriptsBuiltAgainstDeprecatedApiWithTicker = outVal;
                 }
             }
+            else if (String::Equals(keyStr, "DisableConsole", StringComparison::OrdinalIgnoreCase))
+            {
+                bool outVal;
+                if (Boolean::TryParse(valueStr, outVal))
+                {
+                    ScriptHookVDotNet::DisableConsole = outVal;
+                }
+            }
             else if (String::Equals(keyStr, "AutoLoadScripts", StringComparison::OrdinalIgnoreCase))
             {
                 bool outVal;
@@ -635,7 +639,12 @@ static void ScriptHookVDotNet_ManagedInit()
         SHVDN::Log::Message(SHVDN::Log::Level::Error, "Failed to initialize native memory members: ", ex->ToString());
     }
 
-    try
+    if (ScriptHookVDotNet::DisableConsole)
+    {
+        SHVDN::Log::Message(SHVDN::Log::Level::Debug,
+            "DisableConsole is set to true, skipping console creation.");
+    }
+    else try
     {
         // Instantiate console inside script domain, so that it can access the scripting API
         console = (SHVDN::Console^)domain->AppDomain->CreateInstanceFromAndUnwrap(
@@ -756,15 +765,16 @@ static void ScriptHookVDotNet_ManagedKeyboardMessage(unsigned long keycode, bool
     if (shift) keys = keys | WinForms::Keys::Shift;
     if (alt)   keys = keys | WinForms::Keys::Alt;
 
-    SHVDN::Console^ console = ScriptHookVDotNet::console;
-    if (console != nullptr)
+    if (keydown && AreAllKeysPressed(ScriptHookVDotNet::reloadKeyBinding))
     {
-        if (keydown && AreAllKeysPressed(ScriptHookVDotNet::reloadKeyBinding))
-        {
-            // Force a reload
-            ScriptHookVDotNet::Reload();
-            return;
-        }
+        // Force a reload regardless of console availability
+        ScriptHookVDotNet::Reload();
+        return;
+    }
+
+    SHVDN::Console^ console = ScriptHookVDotNet::console;
+    if (!ScriptHookVDotNet::DisableConsole && console != nullptr)
+    {
         if (keydown && AreAllKeysPressed(ScriptHookVDotNet::consoleKeyBinding))
         {
             // Toggle open state
